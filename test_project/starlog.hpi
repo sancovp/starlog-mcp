@@ -1,0 +1,53 @@
+{
+  "name": "starlog_context",
+  "metadata": {
+    "project_name": "Test Project",
+    "project_description": ""
+  },
+  "blocks": [
+    {
+      "type": "freestyle",
+      "content": "<STARLOG>"
+    },
+    {
+      "type": "freestyle",
+      "content": "<CaptainsLog>"
+    },
+    {
+      "type": "freestyle",
+      "content": "<ProjectMetadata>"
+    },
+    {
+      "type": "freestyle",
+      "content": "Project Name: {project_name}"
+    },
+    {
+      "type": "freestyle",
+      "content": "Description: {project_description}"
+    },
+    {
+      "type": "freestyle",
+      "content": "</ProjectMetadata>"
+    },
+    {
+      "type": "freestyle",
+      "content": "<Started>{session_start_content}</Started>"
+    },
+    {
+      "type": "freestyle",
+      "content": "<DebugDiaries>{debug_logs_content}</DebugDiaries>"
+    },
+    {
+      "type": "freestyle",
+      "content": "<Ended>{session_end_content}</Ended>"
+    },
+    {
+      "type": "freestyle",
+      "content": "</CaptainsLog>"
+    },
+    {
+      "type": "freestyle",
+      "content": "</STARLOG>"
+    }
+  ]
+}

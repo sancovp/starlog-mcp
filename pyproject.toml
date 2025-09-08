@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "starlog-mcp"
+version = "0.1.0"
+description = "STARLOG documentation workflow MCP for Claude Code integration"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Isaac and Claude", email = "noreply@anthropic.com"}
+]
+keywords = ["mcp", "documentation", "workflow", "starlog", "claude-code"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers", 
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9", 
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Text Processing :: Markup"
+]
+dependencies = [
+    "fastmcp==2.9.2",
+    "pydantic>=2.0.0",
+    "heaven-framework>=0.1.13"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio", 
+    "mcp-use"
+]
+
+[project.scripts]
+starlog-server = "starlog_mcp.starlog_mcp:main"
+
+[project.urls]
+Homepage = "https://github.com/sancovp/starlog-mcp"
+Repository = "https://github.com/sancovp/starlog-mcp"
+Issues = "https://github.com/sancovp/starlog-mcp/issues"
+
+[tool.setuptools]
+packages = ["starlog_mcp"]
+
+[tool.setuptools.package-data]
+starlog_mcp = ["*.md", "*.txt"]
