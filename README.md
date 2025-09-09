@@ -38,9 +38,7 @@ STARLOG provides three integrated documentation types:
 
 ## Installation
 
-```bash
-pip install starlog-mcp
-```
+[Installation instructions pending PyPI publication]
 
 ## Quick Start
 
