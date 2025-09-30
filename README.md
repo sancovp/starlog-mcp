@@ -1,3 +1,5 @@
+[![Part of STARSYSTEM](https://img.shields.io/badge/Part%20of-STARSYSTEM-blue)](https://github.com/sancovp/starsystem-metarepo)
+
 # STARLOG MCP
 
 STARLOG (Session, Task, and Activity Record LOG) is a comprehensive documentation workflow system designed for Claude Code integration via the Model Context Protocol (MCP).
