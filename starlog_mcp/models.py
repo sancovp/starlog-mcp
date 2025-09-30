@@ -347,18 +347,24 @@ class StarlogPayloadDiscoveryConfig(PayloadDiscovery):
 
 
 class FlightConfig(BaseModel):
-    """Model for STARLOG flight configurations with project scoping.
+    """Flight configs extend the work_loop with a waypoint subchain.
     
     Registry pattern: starlog_flight_configs with global entries that can be scoped to projects.
-    Flight configs extend the base STARLOG session management with additional waypoints.
+    Flight configs can only add one thing: a waypoint subchain that executes as part of the work_loop phase.
     """
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique flight config ID")
-    name: str = Field(..., description="Flight config name")
+    name: str = Field(..., description="Flight config name (must end with '_flight_config')")
     original_project_path: str = Field(..., description="Path where this flight config was created")
     category: str = Field(default="general", description="Flight config category (research, development, analysis, etc.)")
-    description: str = Field(..., description="Description of what this flight pattern does")
-    flight_config: StarlogPayloadDiscoveryConfig = Field(..., description="StarlogPayloadDiscoveryConfig that contains base STARLOG session with additional waypoints")
+    description: str = Field(..., description="What this flight pattern adds")
+    
+    # The only extension point: optional waypoint subchain
+    work_loop_subchain: Optional[str] = Field(
+        default=None, 
+        description="Path to PayloadDiscovery JSON config for subchain execution"
+    )
+    
     created_at: datetime = Field(default_factory=datetime.now, description="When flight config was created")
     updated_at: datetime = Field(default_factory=datetime.now, description="When flight config was last updated")
     

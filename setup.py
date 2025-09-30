@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="starlog-mcp",
-    version="0.1.0",
+    version="0.1.7",
     description="STARLOG documentation workflow MCP for Claude Code",
     packages=find_packages(),
     install_requires=[

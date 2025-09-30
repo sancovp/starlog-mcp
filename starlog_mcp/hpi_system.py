@@ -34,11 +34,9 @@ class HpiSystemMixin:
             if not os.path.exists(hpi_path):
                 return f"❌ No starlog.hpi found at {path}. Use init_project first."
             
-            # Get project context
+            # Get latest session context only (START + DEBUG ENTRIES + END)
             project_name = self._get_project_name_from_path(path)
-            
-            # Get latest session + debug diary context
-            context = self._get_last_session_and_diary(project_name)
+            context = self._get_latest_session_context(project_name)
             
             # Render HPI file with context
             hpi_content = self._render_hpi_file(hpi_path, context)
@@ -48,6 +46,44 @@ class HpiSystemMixin:
         except Exception as e:
             logger.error(f"Failed to orient: {e}")
             return f"❌ Error getting orientation: {str(e)}"
+    
+    def _get_latest_session_context(self, project_name: str) -> str:
+        """Get latest session context: START + DEBUG ENTRIES + END."""
+        starlog_data = self._get_registry_data(project_name, "starlog")
+        if not starlog_data:
+            return "*No sessions found*"
+        
+        latest_session = self._find_latest_session(starlog_data)
+        if not latest_session:
+            return "*No sessions found*"
+        
+        # Extract session details
+        session_title = latest_session.get('session_title', 'Untitled')
+        start_content = latest_session.get('start_content', 'No start content')
+        end_content = latest_session.get('end_content')
+        session_timestamp = latest_session.get('timestamp')
+        
+        # Build context with START + DEBUG ENTRIES + END
+        context = f"**{session_title}**\n\n"
+        context += f"**START**: {start_content}\n\n"
+        
+        # Add debug entries from session start until session end (or until now if no end)
+        if session_timestamp:
+            end_timestamp = latest_session.get('end_timestamp') if end_content else None
+            debug_entries = self._get_debug_entries_in_range(project_name, session_timestamp, end_timestamp)
+            if debug_entries:
+                context += "**DEBUG ENTRIES**:\n"
+                for entry in debug_entries:
+                    entry_content = entry.get('content', 'No content')
+                    entry_time = entry.get('timestamp', '')[:16]  # YYYY-MM-DDTHH:MM
+                    context += f"- {entry_time}: {entry_content}\n"
+                context += "\n"
+        
+        # Add session end if it exists
+        if end_content:
+            context += f"**END**: {end_content}\n"
+        
+        return context
     
     def _find_latest_session(self, starlog_data: dict) -> dict:
         """Find the most recent session from starlog data."""
@@ -131,10 +167,19 @@ class HpiSystemMixin:
             return json.load(f)
     
     def _render_with_pis(self, hpi_data: dict, project_name: str) -> str:
-        """Render HPI data using PIS system with dynamic template variables."""
+        """Render HPI data using PIS system with template variables for session data."""
         project_description = self._extract_project_description(hpi_data)
         step = self._create_pis_step(hpi_data)
-        template_vars = self._assemble_template_vars(project_name, project_description)
+        
+        # Create template variables for session content (keeping working approach)
+        session_parts = self._get_session_parts(project_name)
+        template_vars = {
+            "project_name": project_name,
+            "project_description": project_description,
+            "session_start_content": session_parts["start"],
+            "debug_logs_content": session_parts["debug_logs"], 
+            "session_end_content": session_parts["end"]
+        }
         
         pis_config = self._create_pis_config(step, template_vars)
         pis = PromptInjectionSystemVX1(pis_config)
@@ -176,18 +221,6 @@ class HpiSystemMixin:
         
         return rendered
     
-    def _assemble_template_vars(self, project_name: str, project_description: str = "") -> Dict[str, Any]:
-        """Dynamically assemble template variables by searching registries."""
-        session_parts = self._get_session_parts(project_name)
-        
-        template_vars = {
-            "project_name": project_name,
-            "project_description": project_description,
-            "session_start_content": session_parts["start"],
-            "debug_logs_content": session_parts["debug_logs"], 
-            "session_end_content": session_parts["end"]
-        }
-        return template_vars
     
     def _get_session_parts(self, project_name: str) -> dict:
         """Get session parts broken down into start, debug logs, and end."""
@@ -331,6 +364,25 @@ class HpiSystemMixin:
         
         return content
     
+    def _get_debug_entries_in_range(self, project_name: str, start_timestamp: str, end_timestamp: str = None) -> list:
+        """Get debug diary entries between start and end timestamps (or until now if no end)."""
+        diary_data = self._get_registry_data(project_name, "debug_diary")
+        if not diary_data:
+            return []
+        
+        entries = []
+        for entry_data in diary_data.values():
+            entry_timestamp = entry_data.get('timestamp', '')
+            if entry_timestamp and entry_timestamp > start_timestamp:
+                # If no end_timestamp, include all entries after start
+                # If end_timestamp exists, only include entries before it
+                if end_timestamp is None or entry_timestamp <= end_timestamp:
+                    entries.append(entry_data)
+        
+        # Sort by timestamp
+        entries.sort(key=lambda x: x.get('timestamp', ''))
+        return entries
+    
     def _get_debug_entries_after(self, project_name: str, after_timestamp: str) -> list:
         """Get all debug diary entries after the given timestamp."""
         diary_data = self._get_registry_data(project_name, "debug_diary")
@@ -347,25 +399,183 @@ class HpiSystemMixin:
         entries.sort(key=lambda x: x.get('timestamp', ''))
         return entries
     
-    def _create_default_hpi_content(self, project_name: str, project_description: str = "") -> Dict[str, Any]:
-        """Create default starlog.hpi content as PromptStepDefinitionVX1 JSON with template variables."""
+    def _create_default_hpi_content(self, project_name: str, project_description: str = "", giint_project_id: str = None) -> Dict[str, Any]:
+        """Create default starlog.hpi content with real values (no templating)."""
+        metadata = {
+            "project_name": project_name,
+            "project_description": project_description
+        }
+        
+        # Add GIINT project mapping if provided
+        if giint_project_id:
+            metadata["giint_project_id"] = giint_project_id
+        
+        # Get GIINT data FIRST to get real values
+        if giint_project_id:
+            giint_data = self._get_giint_project_data(giint_project_id)
+            mode_info = self._detect_project_mode(giint_data)
+            features_text = self._format_giint_features(giint_data)
+            tasks_text = self._format_giint_tasks(giint_data)
+        else:
+            mode_info = {
+                "mode": "standalone", 
+                "instructions": "*No GIINT project linked - operating in standalone STARLOG mode*"
+            }
+            features_text = "*No GIINT project linked*"
+            tasks_text = "*No GIINT project linked*"
+        
+        
+        # Build blocks with REAL VALUES (no template variables)
+        blocks = [
+            {"type": "freestyle", "content": "<STARLOG>"},
+            {"type": "freestyle", "content": "<CaptainsLog>"},
+            {"type": "freestyle", "content": "<ProjectMetadata>"},
+            {"type": "freestyle", "content": f"Project Name: {project_name}"},
+            {"type": "freestyle", "content": f"Description: {project_description}"},
+            {"type": "freestyle", "content": f"Mode: {mode_info['mode']}"},
+            {"type": "freestyle", "content": "</ProjectMetadata>"},
+            {"type": "freestyle", "content": "<ModeInstructions>"},
+            {"type": "freestyle", "content": mode_info['instructions']},
+            {"type": "freestyle", "content": "</ModeInstructions>"}
+        ]
+        
+        # Add GIINT project structure if linked
+        if giint_project_id:
+            blocks.extend([
+                {"type": "freestyle", "content": "<ProjectStructure>"},
+                {"type": "freestyle", "content": features_text},
+                {"type": "freestyle", "content": "</ProjectStructure>"},
+                {"type": "freestyle", "content": "<CurrentTasks>"},
+                {"type": "freestyle", "content": tasks_text},
+                {"type": "freestyle", "content": "</CurrentTasks>"}
+            ])
+        
+        # Add standard STARLOG session blocks with TEMPLATE VARIABLES (keep working approach)
+        blocks.extend([
+            {"type": "freestyle", "content": "<Started>{session_start_content}</Started>"},
+            {"type": "freestyle", "content": "<DebugDiaries>{debug_logs_content}</DebugDiaries>"},
+            {"type": "freestyle", "content": "<Ended>{session_end_content}</Ended>"},
+            {"type": "freestyle", "content": "</CaptainsLog>"},
+            {"type": "freestyle", "content": "</STARLOG>"}
+        ])
+        
         return {
             "name": "starlog_context",
-            "metadata": {
-                "project_name": project_name,
-                "project_description": project_description
-            },
-            "blocks": [
-                {"type": "freestyle", "content": "<STARLOG>"},
-                {"type": "freestyle", "content": "<CaptainsLog>"},
-                {"type": "freestyle", "content": "<ProjectMetadata>"},
-                {"type": "freestyle", "content": "Project Name: {project_name}"},
-                {"type": "freestyle", "content": "Description: {project_description}"},
-                {"type": "freestyle", "content": "</ProjectMetadata>"},
-                {"type": "freestyle", "content": "<Started>{session_start_content}</Started>"},
-                {"type": "freestyle", "content": "<DebugDiaries>{debug_logs_content}</DebugDiaries>"},
-                {"type": "freestyle", "content": "<Ended>{session_end_content}</Ended>"},
-                {"type": "freestyle", "content": "</CaptainsLog>"},
-                {"type": "freestyle", "content": "</STARLOG>"}
-            ]
+            "metadata": metadata,
+            "blocks": blocks
         }
+    
+    def _get_giint_project_data(self, giint_project_id: str) -> dict:
+        """Load GIINT project data from projects.json file."""
+        try:
+            # Get LLM_INTELLIGENCE_DIR from environment, fall back to default
+            llm_intelligence_dir = os.getenv('LLM_INTELLIGENCE_DIR', '/tmp/llm_intelligence_responses')
+            projects_file = os.path.join(llm_intelligence_dir, 'projects.json')
+            
+            if not os.path.exists(projects_file):
+                logger.warning(f"GIINT projects file not found at {projects_file}")
+                return {}
+            
+            with open(projects_file, 'r') as f:
+                projects_data = json.load(f)
+            
+            project_data = projects_data.get(giint_project_id, {})
+            if not project_data:
+                logger.warning(f"GIINT project '{giint_project_id}' not found in projects.json")
+            
+            return project_data
+            
+        except Exception as e:
+            logger.error(f"Failed to load GIINT project data for '{giint_project_id}': {e}")
+            return {}
+    
+    def _format_giint_features(self, giint_data: dict) -> str:
+        """Format GIINT project features into XML structure."""
+        if not giint_data or 'features' not in giint_data:
+            return "*No features defined*"
+        
+        features = giint_data['features']
+        if not features:
+            return "*No features defined*"
+        
+        result = ""
+        for feature_name, feature_data in features.items():
+            result += f"**{feature_name}**\n"
+            
+            # Add components
+            components = feature_data.get('components', {})
+            for component_name, component_data in components.items():
+                result += f"  - {component_name}\n"
+                
+                # Add deliverables
+                deliverables = component_data.get('deliverables', {})
+                for deliverable_name, deliverable_data in deliverables.items():
+                    result += f"    * {deliverable_name}\n"
+                    
+                    # Add tasks count
+                    tasks = deliverable_data.get('tasks', {})
+                    if tasks:
+                        result += f"      ({len(tasks)} tasks)\n"
+            result += "\n"
+        
+        return result.strip()
+    
+    def _format_giint_tasks(self, giint_data: dict) -> str:
+        """Format current GIINT tasks with status information."""
+        if not giint_data or 'features' not in giint_data:
+            return "*No tasks defined*"
+        
+        result = ""
+        task_count = 0
+        
+        features = giint_data['features']
+        for feature_name, feature_data in features.items():
+            components = feature_data.get('components', {})
+            for component_name, component_data in components.items():
+                deliverables = component_data.get('deliverables', {})
+                for deliverable_name, deliverable_data in deliverables.items():
+                    tasks = deliverable_data.get('tasks', {})
+                    for task_id, task_data in tasks.items():
+                        task_count += 1
+                        status = "📋 " if task_data.get('is_ready', False) else "⏳ "
+                        result += f"{status}{feature_name}.{component_name}.{deliverable_name}: {task_id}\n"
+        
+        if task_count == 0:
+            return "*No tasks defined*"
+        
+        return f"Total Tasks: {task_count}\n\n{result.strip()}"
+    
+    def _detect_project_mode(self, giint_data: dict) -> dict:
+        """Detect project mode (planning/execution) based on GIINT task states."""
+        if not giint_data or 'features' not in giint_data:
+            return {
+                "mode": "planning",
+                "instructions": "🎯 You are in PLANNING mode. Call giint.get_mode_instructions(planning) for workflow guidance.\n\nCurrent Context: No project structure found. Start by creating features and components."
+            }
+        
+        # Check for ready tasks
+        ready_tasks = []
+        total_tasks = 0
+        
+        features = giint_data['features']
+        for feature_name, feature_data in features.items():
+            components = feature_data.get('components', {})
+            for component_name, component_data in components.items():
+                deliverables = component_data.get('deliverables', {})
+                for deliverable_name, deliverable_data in deliverables.items():
+                    tasks = deliverable_data.get('tasks', {})
+                    for task_id, task_data in tasks.items():
+                        total_tasks += 1
+                        if task_data.get('is_ready', False):
+                            ready_tasks.append(f"{feature_name}.{component_name}.{deliverable_name}: {task_id}")
+        
+        if ready_tasks:
+            return {
+                "mode": "execution",
+                "instructions": f"🚀 You are in EXECUTION mode. Call giint.get_mode_instructions(execution) for workflow guidance.\n\nCurrent Context: {len(ready_tasks)} ready task(s) found. Execute the next ready task:\n" + "\n".join(f"- {task}" for task in ready_tasks[:3])
+            }
+        else:
+            return {
+                "mode": "planning", 
+                "instructions": f"🎯 You are in PLANNING mode. Call giint.get_mode_instructions(planning) for workflow guidance.\n\nCurrent Context: {total_tasks} task(s) exist but none are ready. Time to spec out and prepare tasks for execution."
+            }

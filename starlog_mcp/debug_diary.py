@@ -2,6 +2,7 @@
 
 import logging
 from typing import Dict, Any, Optional
+from datetime import datetime
 from .models import DebugDiaryEntry
 
 logger = logging.getLogger(__name__)
@@ -9,6 +10,11 @@ logger = logging.getLogger(__name__)
 
 class DebugDiaryMixin:
     """Handles debug diary operations for current project status."""
+    
+    def _generate_stardate(self) -> str:
+        """Generate stardate in format YYYYMMDD.HHMM (e.g., 20250906.0940)."""
+        now = datetime.now()
+        return f"{now.strftime('%Y%m%d.%H%M')}"
     
     def view_debug_diary(self, path: str) -> str:
         """Get current project status from debug diary."""
@@ -65,7 +71,7 @@ class DebugDiaryMixin:
             
             self._save_debug_diary_entry(project_name, entry)
             
-            result_msg = f"✅ Added debug entry: {content[:50]}{'...' if len(content) > 50 else ''}"
+            result_msg = "✅ Added debug entry"
             result_msg = self._handle_github_integration(entry, result_msg)
             
             logger.info(f"Added debug entry {entry.id} to project {project_name}")

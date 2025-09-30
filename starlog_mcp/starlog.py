@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 # Import Heaven registry system
 try:
     from heaven_base.tools.registry_tool import registry_util_func
+    from heaven_base.registry.registry_service import RegistryService
 except ImportError:
     # Fallback for development
     logger.warning(f"Heaven registry not available, using fallback: {traceback.format_exc()}")
@@ -42,9 +43,35 @@ class Starlog(DebugDiaryMixin, StarlogSessionsMixin, RulesMixin, HpiSystemMixin)
             return
         self._initialized = True
         
+        # Auto-populate STARSHIP flight configs if registry doesn't exist or is empty
+        self._ensure_flight_configs_with_defaults()
+        
         logger.info("Initialized STARLOG singleton with HEAVEN registry system")
     
-    def init_project(self, path: str, name: str, description: str = "") -> str:
+    def _ensure_flight_configs_with_defaults(self) -> None:
+        """Ensure starlog_flight_configs registry exists and populate with STARSHIP defaults if empty."""
+        try:
+            # Check if registry exists and has configs
+            current_data = self._get_flight_configs_registry_data()
+            if current_data:
+                # Registry already has configs, don't auto-populate
+                logger.debug("Flight configs registry already populated")
+                return
+            
+            # Registry is empty or doesn't exist - auto-populate STARSHIP defaults
+            try:
+                from starship_mcp.auto_populate import auto_populate_defaults
+                status = auto_populate_defaults()
+                logger.info(f"Auto-populated STARSHIP flight configs: {status}")
+            except ImportError:
+                logger.debug("STARSHIP MCP not available for auto-population")
+            except Exception as e:
+                logger.warning(f"Failed to auto-populate STARSHIP defaults: {e}", exc_info=True)
+                
+        except Exception as e:
+            logger.warning(f"Error ensuring flight configs registry: {e}", exc_info=True)
+    
+    def init_project(self, path: str, name: str, description: str = "", giint_project_id: str = None) -> str:
         """Create new project with registries and starlog.hpi."""
         try:
             # Create project directory if it doesn't exist
@@ -55,15 +82,17 @@ class Starlog(DebugDiaryMixin, StarlogSessionsMixin, RulesMixin, HpiSystemMixin)
             self._create_project_registry(name, "debug_diary") 
             self._create_project_registry(name, "starlog")
             
-            # Create starlog.hpi file
+            # Create starlog.hpi file with GIINT project mapping
             hpi_path = os.path.join(path, "starlog.hpi")
-            hpi_content = self._create_default_hpi_content(name, description)
+            hpi_content = self._create_default_hpi_content(name, description, giint_project_id)
             
             with open(hpi_path, 'w') as f:
                 json.dump(hpi_content, f, indent=2)
             
-            logger.info(f"Initialized STARLOG project '{name}' at {path}")
-            return f"✅ Initialized STARLOG project '{name}' with registries and starlog.hpi"
+            logger.info(f"Initialized STARLOG project '{name}' at {path}" + 
+                       (f" with GIINT mapping to '{giint_project_id}'" if giint_project_id else ""))
+            return f"✅ Initialized STARLOG project '{name}' with registries and starlog.hpi" + \
+                   (f" (linked to GIINT project '{giint_project_id}')" if giint_project_id else "")
             
         except Exception as e:
             logger.error(f"Failed to initialize project: {traceback.format_exc()}")
@@ -125,22 +154,15 @@ class Starlog(DebugDiaryMixin, StarlogSessionsMixin, RulesMixin, HpiSystemMixin)
     def _get_registry_data(self, project_name: str, registry_type: str) -> Dict[str, Any]:
         """Get all data from registry using Heaven registry system."""
         registry_name = f"{project_name}_{registry_type}"
-        result = registry_util_func("get_all", registry_name=registry_name)
         
-        # Parse the result string to extract the actual data
-        if "Items in registry" in result:
-            # Extract the dictionary part from the result string
-            try:
-                start_idx = result.find("{") 
-                if start_idx != -1:
-                    dict_str = result[start_idx:]
-                    # Handle Python literals (None, True, False) in the registry data
-                    dict_str = dict_str.replace("None", "null").replace("True", "true").replace("False", "false")
-                    return json.loads(dict_str.replace("'", '"'))
-            except Exception:
-                logger.warning(f"Failed to parse registry result: {traceback.format_exc()}")
-        
-        return {}
+        try:
+            # Use RegistryService directly instead of parsing display strings
+            service = RegistryService()
+            data = service.get_all(registry_name)
+            return data if data is not None else {}
+        except Exception:
+            logger.warning(f"Failed to get registry data for {registry_name}: {traceback.format_exc()}")
+            return {}
     
     def _add_to_registry(self, project_name: str, registry_type: str, key: str, value: Any) -> str:
         """Add item to registry using Heaven registry system."""
@@ -247,6 +269,78 @@ class Starlog(DebugDiaryMixin, StarlogSessionsMixin, RulesMixin, HpiSystemMixin)
         except:
             return os.path.basename(os.path.dirname(hpi_path))
     
+    def retrieve_starlog(self, project: str, session_id: str = None, 
+                        date_range: str = None, paths: bool = False) -> str:
+        """Generic starlog retrieval with filtering options."""
+        try:
+            project_name = project
+            starlog_data = self._get_registry_data(project_name, "starlog")
+            diary_data = self._get_registry_data(project_name, "debug_diary")
+            
+            if paths:
+                # Return registry file paths
+                context = f"# STARLOG Registry Paths\n\n"
+                context += f"**Starlog Registry**: /tmp/heaven_data/registry/{project_name}_starlog_registry.json\n"
+                context += f"**Debug Diary Registry**: /tmp/heaven_data/registry/{project_name}_debug_diary_registry.json\n"
+                context += f"**Rules Registry**: /tmp/heaven_data/registry/{project_name}_rules_registry.json\n"
+                return context
+            
+            # Filter sessions
+            filtered_sessions = starlog_data
+            if session_id:
+                # Get specific session
+                if session_id in starlog_data:
+                    filtered_sessions = {session_id: starlog_data[session_id]}
+                else:
+                    return f"❌ Session '{session_id}' not found in project '{project}'"
+            elif date_range:
+                # TODO: Implement date range filtering
+                pass
+            
+            # Format results
+            if not filtered_sessions:
+                return f"📋 No STARLOG sessions found for project '{project}'"
+            
+            context = f"# STARLOG History for {project}\n\n"
+            
+            # Sort sessions by timestamp 
+            sorted_sessions = sorted(filtered_sessions.items(), 
+                                   key=lambda x: x[1].get("timestamp", ""), 
+                                   reverse=True)
+            
+            for session_id, session_data in sorted_sessions:
+                context += f"## Session: {session_data.get('session_title', session_id)}\n"
+                context += f"**Date**: {session_data.get('date', 'Unknown')}\n"
+                context += f"**ID**: {session_id}\n"
+                context += f"**Goals**: {', '.join(session_data.get('session_goals', []))}\n\n"
+                context += f"**START**: {session_data.get('start_content', 'No start content')}\n\n"
+                
+                if session_data.get('end_content'):
+                    context += f"**END**: {session_data.get('end_content')}\n\n"
+                else:
+                    context += f"**Status**: Session in progress\n\n"
+                
+                context += "---\n\n"
+            
+            # Add debug diary if no specific session requested
+            if not session_id and diary_data:
+                context += "## Recent Debug Diary Entries\n\n"
+                # Sort by timestamp and get recent entries
+                entries = list(diary_data.items())
+                entries.sort(key=lambda x: x[1].get("timestamp", ""), reverse=True)
+                
+                for entry_id, entry_data in entries[:5]:  # Last 5 entries
+                    timestamp = entry_data.get("timestamp", "").split("T")[0] 
+                    content = entry_data.get("content", "")
+                    context += f"**{timestamp}**: {content}\n"
+                context += "\n"
+            
+            return context
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve starlog: {traceback.format_exc()}")
+            return f"❌ Error retrieving starlog: {str(e)}"
+    
     # Model-registry operations
     def _save_rules_entry(self, project_name: str, rule: RulesEntry) -> str:
         """Save RulesEntry to registry."""
@@ -335,9 +429,20 @@ class Starlog(DebugDiaryMixin, StarlogSessionsMixin, RulesMixin, HpiSystemMixin)
     def _get_flight_configs_registry_data(self) -> Dict[str, Any]:
         """Get all flight configs from registry."""
         try:
-            result = registry_util_func("list", "starlog_flight_configs")
-            if isinstance(result, dict):
-                return result
+            result = registry_util_func("get_all", registry_name="starlog_flight_configs")
+            
+            # Parse the result string to extract the actual data
+            if "Items in registry" in result:
+                try:
+                    start_idx = result.find("{") 
+                    if start_idx != -1:
+                        dict_str = result[start_idx:]
+                        # Handle Python literals (None, True, False) in the registry data
+                        dict_str = dict_str.replace("None", "null").replace("True", "true").replace("False", "false")
+                        return json.loads(dict_str.replace("'", '"'))
+                except Exception:
+                    logger.warning(f"Failed to parse flight configs registry result: {traceback.format_exc()}")
+            
             return {}
         except Exception as e:
             logger.error(f"Failed to get flight configs: {traceback.format_exc()}")
